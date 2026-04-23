@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3D Hand Viewer</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #000; overflow: hidden; font-family: 'Courier New', monospace; }
+  #container { position: relative; width: 100vw; height: 100vh; }
+  #three-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+  #video {
+    position: absolute; bottom: 20px; right: 20px;
+    width: 200px; height: 150px;
+    border: 1px solid rgba(0,255,180,0.35);
+    border-radius: 8px;
+    transform: scaleX(-1);
+    opacity: 0.8;
+    z-index: 10;
+  }
+  #hand-canvas {
+    position: absolute; bottom: 20px; right: 20px;
+    width: 200px; height: 150px;
+    border-radius: 8px;
+    z-index: 11;
+    pointer-events: none;
+  }
+  #ui {
+    position: absolute; top: 20px; left: 20px;
+    z-index: 20;
+    color: rgba(0,255,180,0.8);
+    font-size: 12px;
+    line-height: 1.9;
+  }
+  #status {
+    position: absolute; top: 20px; right: 20px;
+    z-index: 20;
+    color: rgba(0,255,180,0.55);
+    font-size: 11px;
+    text-align: right;
+  }
+  .dot {
+    display: inline-block; width: 7px; height: 7px;
+    border-radius: 50%; background: #0f6;
+    margin-right: 6px; animation: pulse 1.5s infinite;
+  }
+  .dot.red { background: #f44; animation: none; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.25} }
+  #gesture-hint {
+    position: absolute; bottom: 20px; left: 20px;
+    z-index: 20;
+    color: rgba(0,255,180,0.4);
+    font-size: 11px;
+    line-height: 2;
+  }
+  #loading {
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%,-50%);
+    color: rgba(0,255,180,0.8);
+    font-size: 14px;
+    z-index: 30;
+    text-align: center;
+    line-height: 2.2;
+  }
+</style>
+</head>
+<body>
+<div id="container">
+  <canvas id="three-canvas"></canvas>
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="hand-canvas"></canvas>
+  <div id="ui">
+    <div><span class="dot" id="cam-dot"></span>CAMERA</div>
+    <div><span class="dot red" id="hand-dot"></span>HAND TRACKING</div>
+    <div id="gesture-label" style="margin-top:6px;color:rgba(0,255,180,0.35);">—</div>
+  </div>
+  <div id="status">3D OBJECT VIEWER<br><span style="color:rgba(255,255,255,0.25)">three.js + mediapipe</span></div>
+  <div id="gesture-hint">
+    TAY PHẢI pinch + move → rotate<br>
+    TAY TRÁI pinch gần/xa → zoom<br>
+    FIST (tay nào cũng được) → reset<br>
+    Xanh lá = tay phải · Xanh dương = tay trái
+  </div>
+
+  <!-- Control Panel -->
+  <div id="ctrl-panel" style="
+    position:absolute; top:50%; right:20px; transform:translateY(-50%);
+    z-index:20; background:rgba(0,0,0,0.55); border:1px solid rgba(0,255,180,0.2);
+    border-radius:10px; padding:14px 16px; width:180px;
+    color:rgba(0,255,180,0.75); font-size:11px; font-family:'Courier New',monospace;
+    line-height:1.5;
+  ">
+    <div style="font-size:12px;margin-bottom:12px;letter-spacing:1px;color:rgba(0,255,180,0.9);">CONTROLS</div>
+
+    <div style="margin-bottom:10px;">
+      <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+        <span>ROTATE SPEED</span>
+        <span id="rs-val" style="color:#fff;">5.5</span>
+      </div>
+      <input type="range" id="rs-slider" min="1" max="12" step="0.5" value="5.5"
+        style="width:100%;accent-color:#00ffb4;">
+    </div>
+
+    <div style="margin-bottom:10px;">
+      <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+        <span>INERTIA</span>
+        <span id="in-val" style="color:#fff;">0.96</span>
+      </div>
+      <input type="range" id="in-slider" min="0.80" max="0.99" step="0.01" value="0.96"
+        style="width:100%;accent-color:#00ffb4;">
+    </div>
+
+    <div style="margin-top:14px;border-top:1px solid rgba(0,255,180,0.15);padding-top:10px;">
+      <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+        <span>ZOOM SPEED</span>
+        <span id="zs-val" style="color:#fff;">18</span>
+      </div>
+      <input type="range" id="zs-slider" min="5" max="40" step="1" value="18"
+        style="width:100%;accent-color:#00ffb4;">
+    </div>
+
+    <button id="reset-btn" style="
+      margin-top:14px; width:100%; padding:7px 0;
+      background:transparent; border:1px solid rgba(0,255,180,0.35);
+      color:rgba(0,255,180,0.8); font-family:'Courier New',monospace;
+      font-size:11px; letter-spacing:1px; cursor:pointer; border-radius:5px;
+    ">RESET VIEW</button>
+  </div>
+  <div id="loading">INITIALIZING...<br><span style="font-size:11px;color:rgba(0,255,180,0.35)">allow camera access</span></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+
+<script>
+// ── RENDERER ─────────────────────────────────────────────────────
+const canvas = document.getElementById('three-canvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.outputEncoding = THREE.sRGBEncoding;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.2;
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 200);
+
+// Balance the world center so the Grid Room is visually centered
+const WORLD_CENTER_X = 0.0;
+
+camera.position.set(0, 0.15, 6);
+camera.lookAt(WORLD_CENTER_X, 0, 0);
+
+// ── GRID ROOM ────────────────────────────────────────────────────
+function buildRoom() {
+  const W = 9, H = 6, D = 9;
+  const hw = W/2, hh = H/2, hd = D/2;
+  const cols = 12, rows = 8;
+  const verts = [];
+  const line = (x1,y1,z1,x2,y2,z2) => verts.push(
+    x1 + WORLD_CENTER_X, y1, z1,
+    x2 + WORLD_CENTER_X, y2, z2
+  );
+
+  for (let i=0;i<=cols;i++) { const x=-hw+(W/cols)*i; line(x,-hh,-hd,x,-hh,hd); }
+  for (let i=0;i<=rows;i++) { const z=-hd+(D/rows)*i; line(-hw,-hh,z,hw,-hh,z); }
+  for (let i=0;i<=cols;i++) { const x=-hw+(W/cols)*i; line(x,hh,-hd,x,hh,hd); }
+  for (let i=0;i<=rows;i++) { const z=-hd+(D/rows)*i; line(-hw,hh,z,hw,hh,z); }
+  for (let i=0;i<=cols;i++) { const x=-hw+(W/cols)*i; line(x,-hh,-hd,x,hh,-hd); }
+  for (let i=0;i<=6;i++)    { const y=-hh+(H/6)*i;   line(-hw,y,-hd,hw,y,-hd); }
+  for (let i=0;i<=rows;i++) { const z=-hd+(D/rows)*i; line(-hw,-hh,z,-hw,hh,z); }
+  for (let i=0;i<=6;i++)    { const y=-hh+(H/6)*i;   line(-hw,y,-hd,-hw,y,hd); }
+  for (let i=0;i<=rows;i++) { const z=-hd+(D/rows)*i; line(hw,-hh,z,hw,hh,z); }
+  for (let i=0;i<=6;i++)    { const y=-hh+(H/6)*i;   line(hw,y,-hd,hw,y,hd); }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  const mat = new THREE.LineBasicMaterial({ color:0x00cc77, transparent:true, opacity:0.31, depthWrite:false });
+  scene.add(new THREE.LineSegments(geo, mat));
+  scene.fog = new THREE.Fog(0x000000, 8, 22);
+}
+buildRoom();
+
+// ── LIGHTING ─────────────────────────────────────────────────────
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+dirLight.position.set(5 + WORLD_CENTER_X, 10, 7);
+scene.add(dirLight);
+const dirLight2 = new THREE.DirectionalLight(0x88ccff, 0.5);
+dirLight2.position.set(-5 + WORLD_CENTER_X, 3, -3);
+scene.add(dirLight2);
+const pL1 = new THREE.PointLight(0x0055ff, 1.2, 18);
+pL1.position.set(-3 + WORLD_CENTER_X, 2, 2);
+scene.add(pL1);
+const pL2 = new THREE.PointLight(0xff3300, 0.7, 14);
+pL2.position.set(3 + WORLD_CENTER_X, -1, 3);
+scene.add(pL2);
+
+// ── LOAD GLB MODEL ───────────────────────────────────────────────
+const group = new THREE.Group();
+scene.add(group);
+
+const loadEl = document.getElementById('loading');
+loadEl.innerHTML = 'LOADING MODEL...<br><span style="font-size:11px;color:rgba(0,255,180,0.35)">please wait</span>';
+
+const loader = new THREE.GLTFLoader();
+
+loader.load(
+  '/models/camera/Camera_01_1k.gltf',
+  (gltf) => {
+    const model = gltf.scene;
+
+    // Center + normalize to a stable on-screen size
+    const box = new THREE.Box3().setFromObject(model);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z) || 1;
+
+    // Keep model consistently visible in the Grid Room frame
+    const fitScale = 3.6 / maxDim;
+
+    model.position.set(-center.x, -center.y, -center.z);
+    model.scale.setScalar(fitScale);
+
+    model.traverse((child) => {
+      if (!child.isMesh || !child.material) return;
+
+      const meshName = (child.name || '').toLowerCase();
+      const materialNames = (Array.isArray(child.material) ? child.material : [child.material])
+        .map((m) => ((m && m.name) ? m.name.toLowerCase() : ''));
+      const isStrap = meshName.includes('strap') || materialNames.some((n) => n.includes('strap'));
+      if (isStrap) {
+        child.visible = false;
+        return;
+      }
+
+      child.castShadow = true;
+      child.receiveShadow = true;
+
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      materials.forEach((m) => {
+        if (!m) return;
+        m.transparent = false;
+        m.opacity = 1;
+        m.alphaTest = 0;
+        m.depthWrite = true;
+        if ('emissive' in m) {
+          m.emissive.setHex(0x111111);
+          m.emissiveIntensity = 0.35;
+        }
+        if ('metalness' in m) m.metalness = 0.2;
+        if ('roughness' in m) m.roughness = 0.55;
+        m.needsUpdate = true;
+      });
+    });
+
+    group.position.x = 0;
+    group.add(model);
+    loadEl.style.display = 'none';
+  },
+  undefined,
+  (err) => {
+    console.error(err);
+    loadEl.innerHTML = 'MODEL LOAD FAILED<br><span style="font-size:11px;color:rgba(255,100,100,0.55)">check /public/models/camera assets</span>';
+  }
+);
+
+// ── STATE ────────────────────────────────────────────────────────
+const DEFAULT_ROT_X  = 0;
+const DEFAULT_ROT_Y  = 0;
+const DEFAULT_SCALE  = 1.15;
+
+let targetRotX  = DEFAULT_ROT_X;
+let targetRotY  = DEFAULT_ROT_Y;
+let targetScale = DEFAULT_SCALE;
+let currentRotX = 0, currentRotY = 0, currentScale = DEFAULT_SCALE;
+let velX = 0, velY = 0;
+let autoRotate  = false;
+let isPinching  = false;
+let isMouseDragging = false;
+let mousePrevX = 0, mousePrevY = 0;
+
+const LERP_ROT   = 0.12;
+const LERP_SCALE = 0.10;
+// INERTIA and ROTATE_SPEED are now driven by UI sliders
+let INERTIA      = 0.96;   // default: floaty
+let ROTATE_SPEED = 5.5;    // how fast pinch-drag rotates
+
+// ── GESTURE DETECTION HELPERS ─────────────────────────────────────
+function dist2D(a, b) {
+  return Math.sqrt((a.x-b.x)**2 + (a.y-b.y)**2);
+}
+function fingerExtended(lm, tip, pip, wrist) {
+  return dist2D(lm[tip], lm[wrist]) > dist2D(lm[pip], lm[wrist]) * 1.1;
+}
+function isFist(lm) {
+  return [[8,6],[12,10],[16,14],[20,18]].every(([t,p]) => !fingerExtended(lm, t, p, 0));
+}
+
+// ── MEDIAPIPE — 2 HANDS ──────────────────────────────────────────
+const video      = document.getElementById('video');
+const handCanvas = document.getElementById('hand-canvas');
+const hCtx       = handCanvas.getContext('2d');
+handCanvas.width = 200; handCanvas.height = 150;
+
+const camDot  = document.getElementById('cam-dot');
+const handDot = document.getElementById('hand-dot');
+const gLabel  = document.getElementById('gesture-label');
+
+// Right hand state (ROTATE)
+let rPrevX = null, rPrevY = null, rLastDX = 0, rLastDY = 0;
+let rPinching = false;
+
+// Left hand state (ZOOM — depth based)
+let lPrevZ = null;
+let lPinching = false;
+
+let lastHandTime = 0;
+
+const CONNECTIONS = [
+  [0,1],[1,2],[2,3],[3,4],
+  [0,5],[5,6],[6,7],[7,8],
+  [5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],
+  [13,17],[17,18],[18,19],[19,20],[0,17]
+];
+
+function drawHandSkeleton(lm, color) {
+  const W=200, H=150;
+  hCtx.strokeStyle = color;
+  hCtx.lineWidth = 1;
+  CONNECTIONS.forEach(([a,b]) => {
+    hCtx.beginPath();
+    hCtx.moveTo((1-lm[a].x)*W, lm[a].y*H);
+    hCtx.lineTo((1-lm[b].x)*W, lm[b].y*H);
+    hCtx.stroke();
+  });
+  lm.forEach((p,i) => {
+    const isTip = i===4||i===8;
+    hCtx.beginPath();
+    hCtx.arc((1-p.x)*W, p.y*H, isTip?4:2, 0, Math.PI*2);
+    hCtx.fillStyle = isTip ? '#ffffff' : color;
+    hCtx.fill();
+  });
+}
+
+const hands = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+hands.setOptions({
+  maxNumHands: 2,
+  modelComplexity: 1,
+  minDetectionConfidence: 0.72,
+  minTrackingConfidence: 0.65
+});
+
+hands.onResults(results => {
+  hCtx.clearRect(0,0,200,150);
+
+  const landmarks  = results.multiHandLandmarks  || [];
+  const handedness = results.multiHandedness      || [];
+
+  // If no hands at all
+  if (!landmarks.length) {
+    if (rPinching) {
+      velX = rLastDY * ROTATE_SPEED * 0.7;
+      velY = rLastDX * ROTATE_SPEED * 0.7;
+    }
+    rPinching = false; lPinching = false;
+    rPrevX = rPrevY = lPrevZ = null;
+    autoRotate = false;
+    handDot.className = 'dot red';
+    gLabel.textContent = '—';
+    gLabel.style.color = 'rgba(0,255,180,0.3)';
+    return;
+  }
+
+  handDot.className = 'dot';
+  lastHandTime = performance.now();
+
+  // Reset per-frame tracking flags
+  let sawRight = false, sawLeft = false;
+  let gestureTexts = [];
+
+  landmarks.forEach((lm, idx) => {
+    // Phân biệt tay bằng vị trí X — đáng tin hơn label của MediaPipe
+    // Camera mirror: lm[0].x gần 0 = bên phải màn hình = tay PHẢI của user
+    // lm[0].x gần 1 = bên trái màn hình = tay TRÁI của user
+    // Threshold 0.5 = chia đôi màn hình
+    const wristX = lm[0].x;
+    const isUserRight = !window.flipHands ? (wristX < 0.5) : (wristX >= 0.5);
+    const isUserLeft  = !isUserRight;
+
+    const color = isUserRight ? 'rgba(0,255,140,0.6)' : 'rgba(80,160,255,0.6)';
+    drawHandSkeleton(lm, color);
+
+    const thumb = lm[4], index = lm[8];
+    const pinchDist = dist2D(thumb, index);
+    const pinching  = pinchDist < 0.065;
+    const fist      = isFist(lm);
+
+    // ── FIST (either hand) → RESET ──────────────────────────────
+    if (fist) {
+      targetRotX = DEFAULT_ROT_X; targetRotY = DEFAULT_ROT_Y;
+      targetScale = DEFAULT_SCALE;
+      velX = 0; velY = 0;
+      autoRotate = false;
+      rPinching = false; lPinching = false;
+      rPrevX = rPrevY = lPrevZ = null;
+      gestureTexts.push('FIST RESET');
+      return;
+    }
+
+    // ── RIGHT HAND → ROTATE ──────────────────────────────────────
+    if (isUserRight) {
+      sawRight = true;
+      if (pinching) {
+        autoRotate = false;
+        rPinching = true;
+        const cx = (thumb.x + index.x) / 2;
+        const cy = (thumb.y + index.y) / 2;
+        if (rPrevX !== null) {
+          const dx = cx - rPrevX;
+          const dy = cy - rPrevY;
+          targetRotY += dx * ROTATE_SPEED;
+          targetRotX += dy * (ROTATE_SPEED * 0.72);
+          rLastDX = dx; rLastDY = dy;
+        }
+        rPrevX = cx; rPrevY = cy;
+        gestureTexts.push('R:ROTATE');
+      } else {
+        if (rPinching) {
+          velX = rLastDY * ROTATE_SPEED * 0.7;
+          velY = rLastDX * ROTATE_SPEED * 0.7;
+        }
+        rPinching = false;
+        rPrevX = rPrevY = null;
+        gestureTexts.push('R:open');
+      }
+    }
+
+    // ── LEFT HAND → ZOOM (depth) ─────────────────────────────────
+    if (isUserLeft) {
+      sawLeft = true;
+      if (pinching) {
+        lPinching = true;
+        const cz = (thumb.z + index.z) / 2;
+        if (lPrevZ !== null) {
+          const dz = cz - lPrevZ;
+          // Move hand closer to camera (dz negative) → zoom in
+          targetScale = Math.max(0.7, Math.min(2.2, targetScale - dz * (window.ZOOM_SPEED||18)));
+        }
+        lPrevZ = cz;
+        gestureTexts.push('L:ZOOM');
+      } else {
+        lPinching = false;
+        lPrevZ = null;
+        gestureTexts.push('L:open');
+      }
+    }
+  });
+
+  // If right hand disappeared mid-pinch → apply inertia
+  if (!sawRight && rPinching) {
+    velX = rLastDY * ROTATE_SPEED * 0.7;
+    velY = rLastDX * ROTATE_SPEED * 0.7;
+    rPinching = false;
+    rPrevX = rPrevY = null;
+  }
+  if (!sawLeft) { lPinching = false; lPrevZ = null; }
+
+  // Update label
+  const labelColor = gestureTexts.some(t => t.includes('RESET')) ? 'rgba(255,200,0,1)'
+    : gestureTexts.some(t => t.includes('ROTATE') || t.includes('ZOOM')) ? 'rgba(0,255,180,1)'
+    : 'rgba(0,255,180,0.45)';
+  gLabel.textContent = gestureTexts.join(' | ') || '—';
+  gLabel.style.color = labelColor;
+});
+
+async function startCamera() {
+  try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error('getUserMedia is not supported in this browser context.');
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({ video:{width:640,height:480,facingMode:'user'} });
+    video.srcObject = stream;
+    camDot.className = 'dot';
+    const mpCam = new Camera(video, {
+      onFrame: async () => { await hands.send({ image: video }); },
+      width: 640, height: 480
+    });
+    mpCam.start();
+  } catch(e) {
+    console.warn('Camera is unavailable, falling back to mouse controls.', e);
+    const loadingEl = document.getElementById('loading');
+    loadingEl.innerHTML = 'CAMERA OFF<br><span style="font-size:11px;color:rgba(255,180,100,0.7)">drag mouse to rotate / wheel to zoom</span>';
+    setTimeout(() => { loadingEl.style.display = 'none'; }, 1800);
+    camDot.className = 'dot red';
+    handDot.className = 'dot red';
+    gLabel.textContent = 'MOUSE MODE';
+    gLabel.style.color = 'rgba(255,180,100,0.95)';
+  }
+}
+startCamera();
+
+// ── MOUSE CONTROLS (fallback when camera is unavailable) ──────────
+canvas.addEventListener('pointerdown', (e) => {
+  isMouseDragging = true;
+  autoRotate = false;
+  mousePrevX = e.clientX;
+  mousePrevY = e.clientY;
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!isMouseDragging) return;
+  const dx = e.clientX - mousePrevX;
+  const dy = e.clientY - mousePrevY;
+  mousePrevX = e.clientX;
+  mousePrevY = e.clientY;
+  targetRotY += dx * 0.008;
+  targetRotX += dy * 0.008;
+});
+canvas.addEventListener('pointerup', (e) => {
+  isMouseDragging = false;
+  canvas.releasePointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointercancel', (e) => {
+  isMouseDragging = false;
+  canvas.releasePointerCapture(e.pointerId);
+});
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  autoRotate = false;
+  const zoomFactor = e.deltaY > 0 ? 0.98 : 1.02;
+  targetScale *= zoomFactor;
+  targetScale = Math.min(2.2, Math.max(0.7, targetScale));
+}, { passive: false });
+
+// ── RENDER LOOP ───────────────────────────────────────────────────
+let tick = 0;
+
+function animate() {
+  requestAnimationFrame(animate);
+  tick += 0.005;
+  const now = performance.now();
+
+  if (!rPinching && !autoRotate) {
+    velX *= INERTIA;
+    velY *= INERTIA;
+    targetRotX += velX * 0.055;
+    targetRotY += velY * 0.055;
+    const velMag = Math.abs(velX) + Math.abs(velY);
+    if (velMag < 0.0005 && now - lastHandTime > 4000) autoRotate = false;
+  }
+
+  if (autoRotate) {
+    targetRotY  += 0.004;
+    currentRotY  = targetRotY;
+    currentRotX += (targetRotX - currentRotX) * 0.05;
+  } else {
+    currentRotX += (targetRotX - currentRotX) * LERP_ROT;
+    currentRotY += (targetRotY - currentRotY) * LERP_ROT;
+  }
+
+  currentScale += (targetScale - currentScale) * LERP_SCALE;
+
+  group.rotation.x = currentRotX;
+  group.rotation.y = currentRotY;
+  group.scale.setScalar(currentScale);
+  // subtle float via camera offset instead of group
+  camera.position.y = 0.15;
+
+  pL1.intensity = 1.2 + Math.sin(tick * 2.0) * 0.25;
+  pL2.intensity = 0.6 + Math.cos(tick * 1.6) * 0.15;
+
+  renderer.render(scene, camera);
+}
+animate();
+
+// ── CONTROL PANEL BINDINGS ───────────────────────────────────────
+document.getElementById('rs-slider').addEventListener('input', e => {
+  ROTATE_SPEED = parseFloat(e.target.value);
+  document.getElementById('rs-val').textContent = ROTATE_SPEED.toFixed(1);
+});
+document.getElementById('in-slider').addEventListener('input', e => {
+  INERTIA = parseFloat(e.target.value);
+  document.getElementById('in-val').textContent = INERTIA.toFixed(2);
+});
+document.getElementById('zs-slider').addEventListener('input', e => {
+  window.ZOOM_SPEED = parseInt(e.target.value);
+  document.getElementById('zs-val').textContent = window.ZOOM_SPEED;
+});
+document.getElementById('reset-btn').addEventListener('click', () => {
+  targetRotX = DEFAULT_ROT_X; targetRotY = DEFAULT_ROT_Y;
+  targetScale = DEFAULT_SCALE;
+  velX = 0; velY = 0; autoRotate = false;
+});
+window.flipHands = false;
+document.getElementById('flip-btn').addEventListener('click', () => {
+  window.flipHands = !window.flipHands;
+  document.getElementById('flip-btn').textContent =
+    'FLIP HANDS: ' + (window.flipHands ? 'ON' : 'OFF');
+  document.getElementById('flip-btn').style.color =
+    window.flipHands ? 'rgba(255,200,0,0.9)' : 'rgba(80,160,255,0.8)';
+  document.getElementById('flip-btn').style.borderColor =
+    window.flipHands ? 'rgba(255,200,0,0.5)' : 'rgba(80,160,255,0.4)';
+});
+window.ZOOM_SPEED = 18;
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>

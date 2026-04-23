@@ -1,0 +1,45 @@
+/* HOWL STUDIO base tokens */
+:root {
+  --hs-black: #0a0a0a;
+  --hs-white: #f5f5f5;
+  --hs-accent: #e8ff47;
+  --hs-accent-dim: rgba(232, 255, 71, 0.12);
+
+  --hs-gray-900: #111111;
+  --hs-gray-800: #1c1c1c;
+  --hs-gray-700: #2a2a2a;
+  --hs-gray-600: #3d3d3d;
+  --hs-gray-400: #7a7a7a;
+  --hs-gray-200: #c4c4c4;
+
+  --hs-success: #4ade80;
+  --hs-warning: #fbbf24;
+  --hs-error: #f87171;
+  --hs-info: #60a5fa;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  --radius-md: 8px;
+  --duration-base: 240ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--hs-black);
+  color: var(--hs-white);
+  font-family: var(--font-body), sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
