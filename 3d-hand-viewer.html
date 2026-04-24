@@ -78,7 +78,7 @@
   <div id="gesture-hint">
     TAY PHẢI pinch + move → rotate<br>
     TAY TRÁI pinch gần/xa → zoom<br>
-    FIST (tay nào cũng được) → reset<br>
+    NẮM CẢ 2 TAY → reset<br>
     Xanh lá = tay phải · Xanh dương = tay trái
   </div>
 
@@ -228,9 +228,10 @@ loader.load(
       if (!child.isMesh || !child.material) return;
 
       const meshName = (child.name || '').toLowerCase();
-      const materialNames = (Array.isArray(child.material) ? child.material : [child.material])
-        .map((m) => ((m && m.name) ? m.name.toLowerCase() : ''));
-      const isStrap = meshName.includes('strap') || materialNames.some((n) => n.includes('strap'));
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      const materialNames = materials.map((m) => ((m && m.name) ? m.name.toLowerCase() : ''));
+      const searchable = `${meshName} ${materialNames.join(' ')}`;
+      const isStrap = searchable.includes('strap');
       if (isStrap) {
         child.visible = false;
         return;
@@ -239,7 +240,6 @@ loader.load(
       child.castShadow = true;
       child.receiveShadow = true;
 
-      const materials = Array.isArray(child.material) ? child.material : [child.material];
       materials.forEach((m) => {
         if (!m) return;
         m.transparent = false;
@@ -380,6 +380,7 @@ hands.onResults(results => {
 
   // Reset per-frame tracking flags
   let sawRight = false, sawLeft = false;
+  let fistCount = 0;
   let gestureTexts = [];
 
   landmarks.forEach((lm, idx) => {
@@ -399,15 +400,10 @@ hands.onResults(results => {
     const pinching  = pinchDist < 0.065;
     const fist      = isFist(lm);
 
-    // ── FIST (either hand) → RESET ──────────────────────────────
+    // ── FIST MARKER (reset requires two fists in same frame) ────
     if (fist) {
-      targetRotX = DEFAULT_ROT_X; targetRotY = DEFAULT_ROT_Y;
-      targetScale = DEFAULT_SCALE;
-      velX = 0; velY = 0;
-      autoRotate = false;
-      rPinching = false; lPinching = false;
-      rPrevX = rPrevY = lPrevZ = null;
-      gestureTexts.push('FIST RESET');
+      fistCount += 1;
+      gestureTexts.push(isUserRight ? 'R:FIST' : 'L:FIST');
       return;
     }
 
@@ -447,7 +443,6 @@ hands.onResults(results => {
         const cz = (thumb.z + index.z) / 2;
         if (lPrevZ !== null) {
           const dz = cz - lPrevZ;
-          // Move hand closer to camera (dz negative) → zoom in
           targetScale = Math.max(0.7, Math.min(2.2, targetScale - dz * (window.ZOOM_SPEED||18)));
         }
         lPrevZ = cz;
@@ -468,6 +463,16 @@ hands.onResults(results => {
     rPrevX = rPrevY = null;
   }
   if (!sawLeft) { lPinching = false; lPrevZ = null; }
+
+  if (landmarks.length >= 2 && fistCount >= 2) {
+    targetRotX = DEFAULT_ROT_X; targetRotY = DEFAULT_ROT_Y;
+    targetScale = DEFAULT_SCALE;
+    velX = 0; velY = 0;
+    autoRotate = false;
+    rPinching = false; lPinching = false;
+    rPrevX = rPrevY = lPrevZ = null;
+    gestureTexts = ['DOUBLE FIST RESET'];
+  }
 
   // Update label
   const labelColor = gestureTexts.some(t => t.includes('RESET')) ? 'rgba(255,200,0,1)'
